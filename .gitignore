@@ -1,0 +1,67 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.memo
+*.manifest
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.tox/
+htmlcov/
+.pytest_cache/
+
+# Editors
+.vscode/        # VS Code
+.idea/          # IntelliJ / PyCharm
+*.swp           # Vim swap files
+
+# OS-specific files
+.DS_Store       # macOS
+Thumbs.db       # Windows
+
+# Environment variables
+.env            # User explicitly created this for sensitive data
+
+# Docker
+.dockerignore   # Not usually ignored, but if it contains sensitive info
+*.log           # General log files
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Large data / model files (adjust as needed)
+# It's generally good practice to ignore large binary files or model checkpoints
+# within data/ and notebooks/ that are not meant for version control.
+# Example:
+data/*.pkl
+data/*.h5
+data/*.bin
+data/*.model
+notebooks/*.pkl
+notebooks/*.h5
+notebooks/*.bin
+notebooks/*.model
