@@ -65,3 +65,4 @@ notebooks/*.pkl
 notebooks/*.h5
 notebooks/*.bin
 notebooks/*.model
+.env
