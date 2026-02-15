@@ -1,8 +1,14 @@
 import streamlit as st
 import requests
 import os
+from dotenv import load_dotenv
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+# โหลด environment variables
+load_dotenv()
+
+API_URL = os.getenv("BACKEND_URL", os.getenv("API_URL", "http://localhost:8000"))
+
+SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "default_secret_key")
 
 st.set_page_config(
     page_title="Jenosize Trend Generator",
@@ -45,8 +51,13 @@ with col2:
         if not topic:
             st.warning("Please enter a topic first.")
         else:
-            with st.spinner("🤖 AI is researching and writing... (this may may take a moment)"):
+            with st.spinner("🤖 AI is researching and writing... (this may take a moment)"):
                 try:
+                    headers = {
+                        "X-API-Key": SERVICE_API_KEY,
+                        "Content-Type": "application/json"
+                    }
+                    
                     payload = {
                         "topic": topic,
                         "industry": industry,
@@ -55,7 +66,12 @@ with col2:
                         "source_url": source_url
                     }
                     
-                    response = requests.post(f"{API_URL}/generate", json=payload)
+                    # ส่ง Request พร้อม Header
+                    response = requests.post(
+                        f"{API_URL}/generate-article", 
+                        headers=headers, 
+                        json=payload
+                    )
                     
                     if response.status_code == 200:
                         data = response.json()
@@ -69,8 +85,10 @@ with col2:
                             file_name=f"{topic}_jenosize_article.md",
                             mime="text/markdown"
                         )
+                    elif response.status_code == 401:
+                        st.error("❌ Authentication Error: API Key mismatch or missing.")
                     else:
-                        st.error(f"Error: {response.text}")
+                        st.error(f"Error {response.status_code}: {response.text}")
                         
                 except Exception as e:
                     st.error(f"Connection Error: {e}")

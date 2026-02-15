@@ -37,44 +37,42 @@ def read_root():
 
 @app.post("/generate-article")
 def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
-    # Format the prompt to match the training data instruction
-    instruction = "Write a creative trend analysis article in Jenosize's professional style."
-    prompt = f"### Instruction:\n{instruction}\n\n### Input:\nTopic: {req.topic}\n\n### Response:\n"
+    # Dynamic instruction based on tone
+    tone_instructions = {
+        "Casual": "Write a friendly and conversational trend analysis article",
+        "Professional": "Write a professional and insightful trend analysis article",
+        "Visionary": "Write an inspiring and forward-thinking trend analysis article",
+        "Urgent": "Write a compelling and action-driven trend analysis article"
+    }
+    
+    base_instruction = tone_instructions.get(req.tone, "Write a creative trend analysis article")
+    instruction = f"{base_instruction} in Jenosize's style for {req.target_audience} in the {req.industry} industry."
+    
+    # Build detailed input with all parameters
+    input_text = f"Topic: {req.topic}"
+    
+    # Add source URL if provided
+    if req.source_url:
+        input_text += f"\nSource Reference: {req.source_url}"
+    
+    prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
 
+    # Dynamic parameters based on tone
+    tone_params = {
+        "Casual": {"temperature": 0.8, "top_p": 0.92, "max_tokens": 700},
+        "Professional": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 800},
+        "Visionary": {"temperature": 0.85, "top_p": 0.95, "max_tokens": 900},
+        "Urgent": {"temperature": 0.75, "top_p": 0.88, "max_tokens": 750}
+    }
+    
+    params = tone_params.get(req.tone, {"temperature": 0.7, "top_p": 0.9, "max_tokens": 800})
+    
     payload = {
         "inputs": prompt,
         "parameters": {
-            "max_new_tokens": 800,
-            "temperature": 0.7,
-            "top_p": 0.9,
+            "max_new_tokens": params["max_tokens"],
+            "temperature": params["temperature"],
+            "top_p": params["top_p"],
             "return_full_text": False
         }
     }
-
-    try:
-        response = requests.post(API_URL, headers=HF_HEADERS, json=payload)
-        response.raise_for_status()
-        
-        data = response.json()
-        result_text = data[0]['generated_text'].strip()
-        
-        return {
-            "topic": req.topic,
-            "article": result_text,
-            "status": "success"
-        }
-        
-    except Exception as e:
-        if 'response' in locals() and hasattr(response, 'json'):
-            try:
-                error_data = response.json()
-                if 'estimated_time' in error_data:
-                    wait_time = error_data['estimated_time']
-                    raise HTTPException(
-                        status_code=503, 
-                        detail=f"Model is waking up... Please wait about {wait_time:.0f} seconds and try again."
-                    )
-            except ValueError:
-                pass # Ignore json parsing errors here
-            
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
