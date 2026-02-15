@@ -2,8 +2,13 @@ from fastapi import FastAPI, HTTPException, Depends, Security, status
 from fastapi.security import APIKeyHeader
 import requests
 import os
+import logging
 from dotenv import load_dotenv
 from schemas import TopicRequest
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -37,6 +42,8 @@ def read_root():
 
 @app.post("/generate-article")
 def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
+    logger.info(f"Generating article for topic: {req.topic}")
+    
     # Dynamic instruction based on tone
     tone_instructions = {
         "Casual": "Write a friendly and conversational trend analysis article",
@@ -56,6 +63,8 @@ def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
         input_text += f"\nSource Reference: {req.source_url}"
     
     prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
+    
+    logger.info(f"Generated prompt length: {len(prompt)} chars")
 
     # Dynamic parameters based on tone
     tone_params = {
@@ -76,3 +85,83 @@ def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
             "return_full_text": False
         }
     }
+    
+    logger.info(f"Sending request to HuggingFace API: {API_URL}")
+
+    try:
+        response = requests.post(API_URL, headers=HF_HEADERS, json=payload, timeout=120)
+        response.raise_for_status()
+        
+        logger.info(f"Received response with status code: {response.status_code}")
+        
+        data = response.json()
+        logger.info(f"Response data type: {type(data)}")
+        
+        # Handle different response formats from HuggingFace
+        if isinstance(data, list) and len(data) > 0:
+            result_text = data[0].get('generated_text', '').strip()
+        elif isinstance(data, dict):
+            result_text = data.get('generated_text', '').strip()
+        else:
+            logger.error(f"Unexpected response format: {type(data)}, data: {data}")
+            raise ValueError(f"Unexpected response format: {type(data)}")
+        
+        if not result_text:
+            logger.error("Generated text is empty")
+            raise ValueError("Generated text is empty")
+        
+        logger.info(f"Successfully generated article of length: {len(result_text)} chars")
+        
+        return {
+            "topic": req.topic,
+            "article": result_text,
+            "status": "success"
+        }
+        
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error from HuggingFace: {str(e)}")
+        # Handle HTTP errors from HuggingFace
+        if hasattr(e.response, 'json'):
+            try:
+                error_data = e.response.json()
+                logger.error(f"Error data: {error_data}")
+                if 'error' in error_data:
+                    error_msg = error_data['error']
+                    if 'estimated_time' in error_data:
+                        wait_time = error_data['estimated_time']
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"Model is loading. Please wait about {wait_time:.0f} seconds and try again."
+                        )
+                    raise HTTPException(status_code=502, detail=f"HuggingFace API Error: {error_msg}")
+            except (ValueError, KeyError):
+                pass
+        raise HTTPException(status_code=502, detail=f"HuggingFace API Error: {str(e)}")
+        
+    except requests.exceptions.Timeout:
+        logger.error("Request timeout")
+        raise HTTPException(
+            status_code=504,
+            detail="Request to AI model timed out. The model may be busy."
+        )
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request exception: {str(e)}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to connect to AI model: {str(e)}"
+        )
+        
+    except (ValueError, KeyError, IndexError) as e:
+        logger.error(f"Parse error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to parse model response: {str(e)}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
+        )
