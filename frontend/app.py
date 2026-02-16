@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 st.title("🚀 Jenosize Future Ideas Generator")
-st.markdown("Create insightful articles about trends and future ideas for businesses.")
+st.markdown("Create insightful articles about trends and future ideas for businesses - in English and Thai!")
 
 col1, col2 = st.columns([1, 2])
 
@@ -75,16 +75,36 @@ with col2:
                     
                     if response.status_code == 200:
                         data = response.json()
-                        article_content = data.get("article", "")
                         
-                        st.markdown(article_content)
+                        # Get articles from the response
+                        articles = data.get("articles", {})
+                        eng_article = articles.get("en", "")
+                        thai_article = articles.get("th", "")
                         
-                        st.download_button(
-                            label="📥 Download as Markdown",
-                            data=article_content,
-                            file_name=f"{topic}_jenosize_article.md",
-                            mime="text/markdown"
-                        )
+                        # Create tabs for language selection
+                        tab1, tab2 = st.tabs(["🇬🇧 English", "🇹🇭 Thai"])
+                        
+                        with tab1:
+                            st.markdown(eng_article)
+                            st.divider()
+                            
+                            st.download_button(
+                                label="📥 Download English as Markdown",
+                                data=eng_article,
+                                file_name=f"{topic}_jenosize_en.md",
+                                mime="text/markdown"
+                            )
+                        
+                        with tab2:
+                            st.markdown(thai_article)
+                            st.divider()
+                            
+                            st.download_button(
+                                label="📥 Download Thai as Markdown",
+                                data=thai_article,
+                                file_name=f"{topic}_jenosize_th.md",
+                                mime="text/markdown"
+                            )
                     elif response.status_code == 401:
                         st.error("❌ Authentication Error: API Key mismatch or missing.")
                     else:
@@ -95,4 +115,4 @@ with col2:
                     st.info("Ensure Backend is running and reachable.")
 
 st.markdown("---")
-st.caption("Powered by Jenosize AI Model | Designed for Test Assignment Option 1")
+st.caption("Powered by Jenosize AI Model | Bilingual Support (English & Thai) | Designed for Test Assignment Option 1")

@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends, Security, status
 from fastapi.security import APIKeyHeader
-import requests
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 from dotenv import load_dotenv
+from llama_cpp import Llama
 from schemas import TopicRequest
 
 # Configure logging
@@ -14,21 +15,20 @@ load_dotenv()
 
 app = FastAPI(title="Jenosize AI Writer API")
 
-# Retrieve environment variables
-HF_TOKEN = os.getenv("HF_TOKEN")
-HF_REPO = os.getenv("HF_REPO", "mix8645/jenosize-qwen3-4b")
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# API Key security
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY", "default_secret_key")
-
-if not HF_TOKEN:
-    print("⚠️ WARNING: HF_TOKEN not found in .env file!")
-
-API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_REPO}"
-HF_HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
-
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 def verify_api_key(api_key: str = Security(api_key_header)):
-    """Validates the provided API key against the environment variable."""
     if api_key != SERVICE_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -36,132 +36,158 @@ def verify_api_key(api_key: str = Security(api_key_header)):
         )
     return api_key
 
+# --- Load Local GGUF Model ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "model", "chinda-qwen3-4b.Q4_K_M.gguf")
+
+logger.info(f"⏳ Loading Local Model from: {MODEL_PATH}")
+try:
+    llm = Llama(
+        model_path=MODEL_PATH,
+        n_ctx=2048,
+        n_threads=4,
+        verbose=False
+    )
+    logger.info("✅ Model loaded successfully!")
+except Exception as e:
+    logger.error(f"❌ Error loading model: {e}")
+    llm = None
+
+# --- SYSTEM PROMPTS (One-time instruction for all cases) ---
+SYSTEM_PROMPT = """You are a professional article writer for Jenosize - a company known for authentic, human-centered insights about business transformation.
+
+Your writing style:
+- Authentic and human-centered (focus on customer understanding, not technology hype)
+- Conversational yet insightful (warm, relatable tone, never robotic)
+- Story-driven (use real-world examples and narratives)
+- Actionable (provide practical insights readers can implement)
+- Grounded in reality (honest about both opportunities and challenges)
+
+CRITICAL OUTPUT RULES:
+1. Write ONLY the article content - no thinking, reasoning, or meta-commentary
+2. Start directly with a compelling markdown headline (#)
+3. Use proper markdown formatting (###, ####, bullet points)
+4. Include real-world examples and actionable insights
+5. Never explain your approach or process
+6. Focus on customer value and business impact
+7. Maintain authentic, warm tone throughout"""
+
+SYSTEM_PROMPT_THAI = """คุณเป็นนักเขียนบทความมืออาชีพสำหรับ Jenosize - บริษัทที่เป็นที่รู้จักในด้านข้อมูลเชิงลึกที่มีจุดศูนย์กลางมนุษย์เกี่ยวกับการเปลี่ยนแปลงธุรกิจ
+
+สไตล์การเขียนของคุณ:
+- ตัวตนและมีจุดศูนย์กลางมนุษย์ (เน้นความเข้าใจลูกค้า ไม่ใช่การโปรโมตเทคโนโลยี)
+- เป็นการสนทนา แต่มีความลึกซึ้ง (โทนเสียงที่อบอุ่น เข้าถึงได้ ไม่เคยเป็นหุ่นยนต์)
+- ขับเคลื่อนด้วยเรื่องราว (ใช้ตัวอย่างและการบรรยายจากโลกจริง)
+- ใช้ได้จริง (ให้ข้อมูลเชิงลึกปฏิบัติที่ผู้อ่านสามารถนำไปใช้)
+- มีพื้นฐานในความเป็นจริง (ซื่อสัตย์เกี่ยวกับโอกาสและความท้าทายทั้งสองด้าน)
+
+กฎการส่งออกที่สำคัญ:
+1. เขียนเฉพาะเนื้อหาบทความ - ไม่มีการคิด ให้เหตุผล หรือคิดความเห็นทั่วไป
+2. เริ่มต้นโดยตรงด้วยหัวเรื่องที่น่าสนใจ markdown (#)
+3. ใช้การจัดรูปแบบ markdown ที่เหมาะสม (###, ####, จุดหลัก)
+4. รวมตัวอย่างจากโลกจริงและข้อมูลเชิงลึกที่ใช้ได้จริง
+5. อย่าเคยอธิบายวิธีการหรือกระบวนการของคุณ
+6. เน้นมูลค่าของลูกค้าและผลกระทบต่อธุรกิจ
+7. รักษาโทนเสียงที่ตัวตนและอบอุ่นตลอดเวลา"""
+
 @app.get("/")
 def read_root():
-    return {"status": "🚀 Jenosize AI Backend is running (Secure Mode)!"}
+    return {"status": "🚀 Jenosize AI Backend is running!"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "model_loaded": llm is not None}
+
+@app.get("/model-status")
+def model_status():
+    return {
+        "model_loaded": llm is not None,
+        "model_path": MODEL_PATH,
+        "model_exists": os.path.exists(MODEL_PATH),
+    }
 
 @app.post("/generate-article")
 def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
-    logger.info(f"Generating article for topic: {req.topic}")
-    
-    # Dynamic instruction based on tone
-    tone_instructions = {
-        "Casual": "Write a friendly and conversational trend analysis article",
-        "Professional": "Write a professional and insightful trend analysis article",
-        "Visionary": "Write an inspiring and forward-thinking trend analysis article",
-        "Urgent": "Write a compelling and action-driven trend analysis article"
-    }
-    
-    base_instruction = tone_instructions.get(req.tone, "Write a creative trend analysis article")
-    instruction = f"{base_instruction} in Jenosize's style for {req.target_audience} in the {req.industry} industry."
-    
-    # Build detailed input with all parameters
-    input_text = f"Topic: {req.topic}"
-    
-    # Add source URL if provided
-    if req.source_url:
-        input_text += f"\nSource Reference: {req.source_url}"
-    
-    prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
-    
-    logger.info(f"Generated prompt length: {len(prompt)} chars")
+    """
+    Generate article in both English and Thai.
+    Uses unified system prompt approach for consistency.
+    """
+    if not llm:
+        raise HTTPException(status_code=500, detail="AI Model is not loaded properly.")
 
-    # Dynamic parameters based on tone
+    logger.info(f"Generating bilingual article - Topic: {req.topic}, Tone: {req.tone}")
+    
+    # Simple parameter mapping based on tone
     tone_params = {
-        "Casual": {"temperature": 0.8, "top_p": 0.92, "max_tokens": 700},
-        "Professional": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 800},
-        "Visionary": {"temperature": 0.85, "top_p": 0.95, "max_tokens": 900},
-        "Urgent": {"temperature": 0.75, "top_p": 0.88, "max_tokens": 750}
+        "Casual": {"temperature": 0.75, "top_p": 0.88},
+        "Professional": {"temperature": 0.65, "top_p": 0.85},
+        "Visionary": {"temperature": 0.80, "top_p": 0.90},
+        "Urgent": {"temperature": 0.70, "top_p": 0.85},
     }
     
-    params = tone_params.get(req.tone, {"temperature": 0.7, "top_p": 0.9, "max_tokens": 800})
-    
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": params["max_tokens"],
-            "temperature": params["temperature"],
-            "top_p": params["top_p"],
-            "return_full_text": False
-        }
-    }
-    
-    logger.info(f"Sending request to HuggingFace API: {API_URL}")
+    params = tone_params.get(req.tone, {"temperature": 0.70, "top_p": 0.85})
 
     try:
-        response = requests.post(API_URL, headers=HF_HEADERS, json=payload, timeout=120)
-        response.raise_for_status()
+        # Generate English article
+        logger.info("Generating English article...")
+        eng_prompt = f"""{SYSTEM_PROMPT}
+
+Topic: {req.topic}
+Industry: {req.industry}
+Target Audience: {req.target_audience}
+Tone: {req.tone}
+{f"Reference: {req.source_url}" if req.source_url else ""}
+
+Write the article:
+"""
+
+        eng_output = llm(
+            eng_prompt,
+            max_tokens=1000,
+            temperature=params["temperature"],
+            top_p=params["top_p"],
+            echo=False
+        )
         
-        logger.info(f"Received response with status code: {response.status_code}")
+        eng_article = eng_output['choices'][0]['text'].strip()
+        logger.info("✅ English article generated!")
+
+        # Generate Thai article
+        logger.info("Generating Thai article...")
+        thai_prompt = f"""{SYSTEM_PROMPT_THAI}
+
+หัวข้อ: {req.topic}
+อุตสาหกรรม: {req.industry}
+กลุ่มผู้ชมเป้าหมาย: {req.target_audience}
+โทน: {req.tone}
+{f"อ้างอิง: {req.source_url}" if req.source_url else ""}
+
+เขียนบทความเป็นภาษาไทย:
+"""
+
+        thai_output = llm(
+            thai_prompt,
+            max_tokens=1000,
+            temperature=params["temperature"],
+            top_p=params["top_p"],
+            echo=False
+        )
         
-        data = response.json()
-        logger.info(f"Response data type: {type(data)}")
-        
-        # Handle different response formats from HuggingFace
-        if isinstance(data, list) and len(data) > 0:
-            result_text = data[0].get('generated_text', '').strip()
-        elif isinstance(data, dict):
-            result_text = data.get('generated_text', '').strip()
-        else:
-            logger.error(f"Unexpected response format: {type(data)}, data: {data}")
-            raise ValueError(f"Unexpected response format: {type(data)}")
-        
-        if not result_text:
-            logger.error("Generated text is empty")
-            raise ValueError("Generated text is empty")
-        
-        logger.info(f"Successfully generated article of length: {len(result_text)} chars")
+        thai_article = thai_output['choices'][0]['text'].strip()
+        logger.info("✅ Thai article generated!")
         
         return {
             "topic": req.topic,
-            "article": result_text,
+            "industry": req.industry,
+            "target_audience": req.target_audience,
+            "tone": req.tone,
+            "articles": {
+                "en": eng_article,
+                "th": thai_article
+            },
             "status": "success"
         }
         
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP Error from HuggingFace: {str(e)}")
-        # Handle HTTP errors from HuggingFace
-        if hasattr(e.response, 'json'):
-            try:
-                error_data = e.response.json()
-                logger.error(f"Error data: {error_data}")
-                if 'error' in error_data:
-                    error_msg = error_data['error']
-                    if 'estimated_time' in error_data:
-                        wait_time = error_data['estimated_time']
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"Model is loading. Please wait about {wait_time:.0f} seconds and try again."
-                        )
-                    raise HTTPException(status_code=502, detail=f"HuggingFace API Error: {error_msg}")
-            except (ValueError, KeyError):
-                pass
-        raise HTTPException(status_code=502, detail=f"HuggingFace API Error: {str(e)}")
-        
-    except requests.exceptions.Timeout:
-        logger.error("Request timeout")
-        raise HTTPException(
-            status_code=504,
-            detail="Request to AI model timed out. The model may be busy."
-        )
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception: {str(e)}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to connect to AI model: {str(e)}"
-        )
-        
-    except (ValueError, KeyError, IndexError) as e:
-        logger.error(f"Parse error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to parse model response: {str(e)}"
-        )
-        
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error: {str(e)}"
-        )
+        logger.error(f"Generation Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Generation Error: {str(e)}")
