@@ -42,9 +42,10 @@ MODEL_PATH = os.path.join(BASE_DIR, "model", "chinda-qwen3-4b.Q4_K_M.gguf")
 
 logger.info(f"⏳ Loading Local Model from: {MODEL_PATH}")
 try:
+    # เพิ่ม n_ctx เป็น 4096 เพื่อให้มีพื้นที่ Token เพียงพอสำหรับบทความภาษาอังกฤษ + คำแปลภาษาไทย
     llm = Llama(
         model_path=MODEL_PATH,
-        n_ctx=2048,
+        n_ctx=4096,
         n_threads=4,
         verbose=False
     )
@@ -53,7 +54,7 @@ except Exception as e:
     logger.error(f"❌ Error loading model: {e}")
     llm = None
 
-# --- SYSTEM PROMPTS (One-time instruction for all cases) ---
+# --- SYSTEM PROMPTS ---
 SYSTEM_PROMPT = """You are a professional article writer for Jenosize - a company known for authentic, human-centered insights about business transformation.
 
 Your writing style:
@@ -71,24 +72,6 @@ CRITICAL OUTPUT RULES:
 5. Never explain your approach or process
 6. Focus on customer value and business impact
 7. Maintain authentic, warm tone throughout"""
-
-SYSTEM_PROMPT_THAI = """คุณเป็นนักเขียนบทความมืออาชีพสำหรับ Jenosize - บริษัทที่เป็นที่รู้จักในด้านข้อมูลเชิงลึกที่มีจุดศูนย์กลางมนุษย์เกี่ยวกับการเปลี่ยนแปลงธุรกิจ
-
-สไตล์การเขียนของคุณ:
-- ตัวตนและมีจุดศูนย์กลางมนุษย์ (เน้นความเข้าใจลูกค้า ไม่ใช่การโปรโมตเทคโนโลยี)
-- เป็นการสนทนา แต่มีความลึกซึ้ง (โทนเสียงที่อบอุ่น เข้าถึงได้ ไม่เคยเป็นหุ่นยนต์)
-- ขับเคลื่อนด้วยเรื่องราว (ใช้ตัวอย่างและการบรรยายจากโลกจริง)
-- ใช้ได้จริง (ให้ข้อมูลเชิงลึกปฏิบัติที่ผู้อ่านสามารถนำไปใช้)
-- มีพื้นฐานในความเป็นจริง (ซื่อสัตย์เกี่ยวกับโอกาสและความท้าทายทั้งสองด้าน)
-
-กฎการส่งออกที่สำคัญ:
-1. เขียนเฉพาะเนื้อหาบทความ - ไม่มีการคิด ให้เหตุผล หรือคิดความเห็นทั่วไป
-2. เริ่มต้นโดยตรงด้วยหัวเรื่องที่น่าสนใจ markdown (#)
-3. ใช้การจัดรูปแบบ markdown ที่เหมาะสม (###, ####, จุดหลัก)
-4. รวมตัวอย่างจากโลกจริงและข้อมูลเชิงลึกที่ใช้ได้จริง
-5. อย่าเคยอธิบายวิธีการหรือกระบวนการของคุณ
-6. เน้นมูลค่าของลูกค้าและผลกระทบต่อธุรกิจ
-7. รักษาโทนเสียงที่ตัวตนและอบอุ่นตลอดเวลา"""
 
 @app.get("/")
 def read_root():
@@ -109,15 +92,14 @@ def model_status():
 @app.post("/generate-article")
 def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
     """
-    Generate article in both English and Thai.
-    Uses unified system prompt approach for consistency.
+    Generate article in English first, then translate to Thai using the same LLM 
+    to maintain context and brand tone perfectly.
     """
     if not llm:
         raise HTTPException(status_code=500, detail="AI Model is not loaded properly.")
 
     logger.info(f"Generating bilingual article - Topic: {req.topic}, Tone: {req.tone}")
     
-    # Simple parameter mapping based on tone
     tone_params = {
         "Casual": {"temperature": 0.75, "top_p": 0.88},
         "Professional": {"temperature": 0.65, "top_p": 0.85},
@@ -128,7 +110,7 @@ def generate_article(req: TopicRequest, api_key: str = Depends(verify_api_key)):
     params = tone_params.get(req.tone, {"temperature": 0.70, "top_p": 0.85})
 
     try:
-        # Generate English article
+        # 1. Generate English article
         logger.info("Generating English article...")
         eng_prompt = f"""{SYSTEM_PROMPT}
 
@@ -143,7 +125,7 @@ Write the article:
 
         eng_output = llm(
             eng_prompt,
-            max_tokens=1000,
+            max_tokens=1500, # ขยาย max_tokens
             temperature=params["temperature"],
             top_p=params["top_p"],
             echo=False
@@ -152,29 +134,32 @@ Write the article:
         eng_article = eng_output['choices'][0]['text'].strip()
         logger.info("✅ English article generated!")
 
-        # Generate Thai article
-        logger.info("Generating Thai article...")
-        thai_prompt = f"""{SYSTEM_PROMPT_THAI}
+        # 2. Translate to Thai using LLM to maintain context
+        logger.info("Translating English to Thai using LLM for context awareness...")
+        
+        thai_prompt = f"""คุณคือนักแปลและนักเขียนบทความมืออาชีพของ Jenosize
 
-หัวข้อ: {req.topic}
-อุตสาหกรรม: {req.industry}
-กลุ่มผู้ชมเป้าหมาย: {req.target_audience}
-โทน: {req.tone}
-{f"อ้างอิง: {req.source_url}" if req.source_url else ""}
+จงแปลบทความภาษาอังกฤษด้านล่างนี้เป็นภาษาไทย โดยมีเงื่อนไขดังนี้:
+1. รักษาความหมาย บริบท และโครงสร้างเดิมไว้ให้ครบถ้วน 100%
+2. ใช้ภาษาที่สละสลวย เป็นธรรมชาติ และอ่านง่ายสำหรับกลุ่ม {req.target_audience}
+3. คุมโทนการเขียนให้เป็นแบบ {req.tone}
 
-เขียนบทความเป็นภาษาไทย:
+บทความต้นฉบับ:
+{eng_article}
+
+แปลเป็นภาษาไทย:
 """
 
         thai_output = llm(
             thai_prompt,
-            max_tokens=1000,
-            temperature=params["temperature"],
-            top_p=params["top_p"],
+            max_tokens=2500, # เผื่อ Token สำหรับภาษาไทยเยอะๆ ป้องกันการโดนตัดจบ
+            temperature=0.1, # ใช้ Temperature ต่ำเพื่อให้แปลตรงไปตรงมา ไม่มโนเนื้อหาเพิ่ม
+            top_p=0.9,
             echo=False
         )
         
         thai_article = thai_output['choices'][0]['text'].strip()
-        logger.info("✅ Thai article generated!")
+        logger.info("✅ Thai article generated (Context Maintained)!")
         
         return {
             "topic": req.topic,
